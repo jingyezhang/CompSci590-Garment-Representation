@@ -8,64 +8,48 @@ class MaskedMSELoss(nn.Module):
     def __init__(self):
         super(MaskedMSELoss, self).__init__()
 
-    def forward(self, pred, target):
+    def forward(self, pred, target, mask):
         assert pred.dim() == target.dim(), "inconsistent dimensions"
-        valid_mask = (target > 0).detach()
-        diff = target - pred
-        diff = diff[valid_mask]
-        self.loss = (diff**2).mean()
-        return self.loss
+
+        # Ensure mask is binary
+        mask = (mask > 0.5).float()
+
+        # Separate the regions based on mask
+        masked_pred = pred * mask
+        masked_target = target * mask
+
+        non_masked_pred = pred * (1 - mask)
+        non_masked_target = target * (1 - mask)
+
+        # Calculate MSE loss separately
+        masked_loss = ((masked_pred - masked_target) ** 2).mean()
+        non_masked_loss = ((non_masked_pred - non_masked_target) ** 2).mean()
+
+        return masked_loss, non_masked_loss
 
 
 class MaskedL1Loss(nn.Module):
     def __init__(self):
         super(MaskedL1Loss, self).__init__()
 
-    def forward(self, pred, target, weight=None):
+    def forward(self, pred, target, mask, weight=None):
         assert pred.dim() == target.dim(), "inconsistent dimensions"
-        valid_mask = (target > 0).detach()
-        diff = target - pred
-        diff = diff[valid_mask]
-        self.loss = diff.abs().mean()
-        return self.loss
 
+        # Ensure mask is binary
+        mask = (mask > 0.5).float()
 
-class PhotometricLoss(nn.Module):
-    def __init__(self):
-        super(PhotometricLoss, self).__init__()
+        # Separate the regions based on mask
+        masked_pred = pred * mask
+        masked_target = target * mask
 
-    def forward(self, target, recon, mask=None):
+        non_masked_pred = pred * (1 - mask)
+        non_masked_target = target * (1 - mask)
 
-        assert recon.dim(
-        ) == 4, "expected recon dimension to be 4, but instead got {}.".format(
-            recon.dim())
-        assert target.dim(
-        ) == 4, "expected target dimension to be 4, but instead got {}.".format(
-            target.dim())
-        assert recon.size()==target.size(), "expected recon and target to have the same size, but got {} and {} instead"\
-            .format(recon.size(), target.size())
-        diff = (target - recon).abs()
-        diff = torch.sum(diff, 1)  # sum along the color channel
+        # Calculate L1 loss separately
+        masked_loss = (torch.abs(masked_pred - masked_target)).mean()
+        non_masked_loss = (torch.abs(non_masked_pred - non_masked_target)).mean()
 
-        # compare only pixels that are not black
-        valid_mask = (torch.sum(recon, 1) > 0).float() * (torch.sum(target, 1)
-                                                          > 0).float()
-        if mask is not None:
-            valid_mask = valid_mask * torch.squeeze(mask).float()
-        valid_mask = valid_mask.byte().detach()
-        if valid_mask.numel() > 0:
-            diff = diff[valid_mask]
-            if diff.nelement() > 0:
-                self.loss = diff.mean()
-            else:
-                print(
-                    "warning: diff.nelement()==0 in PhotometricLoss (this is expected during early stage of training, try larger batch size)."
-                )
-                self.loss = 0
-        else:
-            print("warning: 0 valid pixel in PhotometricLoss")
-            self.loss = 0
-        return self.loss
+        return masked_loss, non_masked_loss
 
 
 class SmoothnessLoss(nn.Module):

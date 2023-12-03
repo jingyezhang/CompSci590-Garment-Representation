@@ -66,36 +66,63 @@ def convt_bn_relu(in_channels, out_channels, kernel_size, \
     return layers
 
 
-class DepthCompletionNet(nn.Module):
+class TactileCompletionNet(nn.Module):
     def __init__(self, args):
         assert (
             args.layers in [18, 34, 50, 101, 152]
         ), 'Only layers 18, 34, 50, 101, and 152 are defined, but got {}'.format(
             layers)
-        super(DepthCompletionNet, self).__init__()
-        self.modality = args.input
-
-        if 'd' in self.modality:
-            channels = 64 // len(self.modality)
-            self.conv1_d = conv_bn_relu(1,
+        super(TactileCompletionNet, self).__init__()
+        channels = 32
+        
+        if args.modality == 'g':
+            self.conv1_t = conv_bn_relu(1,
+                                        channels // 2,
+                                        kernel_size=3,
+                                        stride=1,
+                                        padding=1)
+        else:
+            self.conv1_t = conv_bn_relu(3,
                                         channels,
                                         kernel_size=3,
                                         stride=1,
                                         padding=1)
-        if 'rgb' in self.modality:
-            channels = 64 * 3 // len(self.modality)
-            self.conv1_img = conv_bn_relu(3,
-                                          channels,
-                                          kernel_size=3,
-                                          stride=1,
-                                          padding=1)
-        elif 'g' in self.modality:
-            channels = 64 // len(self.modality)
-            self.conv1_img = conv_bn_relu(1,
-                                          channels,
-                                          kernel_size=3,
-                                          stride=1,
-                                          padding=1)
+            
+        self.conv2_t = conv_bn_relu(channels // 2,
+                                    channels,
+                                    kernel_size=3,
+                                    stride=1,
+                                    padding=1)
+        self.conv3_t = conv_bn_relu(channels,
+                                    channels,
+                                    kernel_size=3,
+                                    stride=1,
+                                    padding=1)
+        
+        if args.modality == 'g':
+            self.conv1_v = conv_bn_relu(3,
+                                        channels + channels // 2,
+                                        kernel_size=3,
+                                        stride=1,
+                                        padding=1)
+        else:
+            self.conv1_v = conv_bn_relu(3,
+                                        channels,
+                                        kernel_size=3,
+                                        stride=1,
+                                        padding=1)
+            
+        self.conv2_v = conv_bn_relu(channels // 2,
+                                    channels,
+                                    kernel_size=3,
+                                    stride=1,
+                                    padding=1)
+        self.conv3_v = conv_bn_relu(channels,
+                                    channels,
+                                    kernel_size=3,
+                                    stride=1,
+                                    padding=1)
+
 
         pretrained_model = resnet.__dict__['resnet{}'.format(
             args.layers)](pretrained=args.pretrained)
@@ -113,7 +140,7 @@ class DepthCompletionNet(nn.Module):
             num_channels = 512
         elif args.layers >= 50:
             num_channels = 2048
-        self.conv6 = conv_bn_relu(num_channels,
+        self.conv6 = conv_bn_relu(num_channels, 
                                   512,
                                   kernel_size=3,
                                   stride=2,
@@ -151,32 +178,52 @@ class DepthCompletionNet(nn.Module):
                                     kernel_size=kernel_size,
                                     stride=1,
                                     padding=1)
-        self.convtf = conv_bn_relu(in_channels=128,
-                                   out_channels=1,
-                                   kernel_size=1,
-                                   stride=1,
-                                   bn=False,
-                                   relu=False)
+        self.convtf_post_1 = conv_bn_relu(in_channels=128,
+                                            out_channels=3,
+                                            kernel_size=1,
+                                            stride=1,
+                                            bn=False,
+                                            relu=False)
+        self.convtf_post_2 = conv_bn_relu(in_channels=64,
+                                            out_channels=32,
+                                            kernel_size=kernel_size,
+                                            stride=1,
+                                            bn=False,
+                                            relu=False)
+        self.convtf_post_3 = conv_bn_relu(in_channels=32,
+                                            out_channels=16,
+                                            kernel_size=kernel_size,
+                                            stride=1,
+                                            bn=False,
+                                            relu=False)
+        self.convtf_post_4 = conv_bn_relu(in_channels=16,
+                                            out_channels=3,
+                                            kernel_size=3,
+                                            stride=1,
+                                            bn=False,
+                                            relu=False)
 
     def forward(self, x):
         # first layer
-        if 'd' in self.modality:
-            conv1_d = self.conv1_d(x['d'])
-        if 'rgb' in self.modality:
-            conv1_img = self.conv1_img(x['rgb'])
-        elif 'g' in self.modality:
-            conv1_img = self.conv1_img(x['g'])
+        conv1_t = self.conv1_t(x['t'])
+        # conv2_t = self.conv2_t(conv1_t)
+        # conv3_t = self.conv3_t(conv2_t)
+        
+        conv1_v = self.conv1_v(x['v'])
+        # conv2_v = self.conv2_v(conv1_v)
+        # conv3_v = self.conv3_v(conv2_v)
 
-        if self.modality == 'rgbd' or self.modality == 'gd':
-            conv1 = torch.cat((conv1_d, conv1_img), 1)
-        else:
-            conv1 = conv1_d if (self.modality == 'd') else conv1_img
+        conv1 = torch.cat((conv1_v, conv1_t), 1)
+        
+        # # peform additive fusion
+        # conv1 = conv1_t + conv1_v
 
         conv2 = self.conv2(conv1)
-        conv3 = self.conv3(conv2)  # batchsize * ? * 176 * 608
-        conv4 = self.conv4(conv3)  # batchsize * ? * 88 * 304
-        conv5 = self.conv5(conv4)  # batchsize * ? * 44 * 152
-        conv6 = self.conv6(conv5)  # batchsize * ? * 22 * 76
+        conv3 = self.conv3(conv2)  # batchsize * ? * 128 * 128
+        conv4 = self.conv4(conv3)  # batchsize * ? * 64 * 64
+        conv5 = self.conv5(conv4)  # batchsize * ? * 32 * 32
+        conv6 = self.conv6(conv5)  # batchsize * ? * 16 * 16
+        
 
         # decoder
         convt5 = self.convt5(conv6)
@@ -193,13 +240,15 @@ class DepthCompletionNet(nn.Module):
 
         convt1 = self.convt1(y)
         y = torch.cat((convt1, conv1), 1)
+        
+        y = self.convtf_post_1(y)
+        
+        # y = self.convtf_post_2(y)
+        
+        # y = self.convtf_post_3(y)
+        
+        # y = self.convtf_post_4(y)        
+        
+        # y_upsampled = F.interpolate(y, size=(256, 256), mode='bilinear', align_corners=False) # # batchsize * 3 * 256 * 256
 
-        y = self.convtf(y)
-
-        if self.training:
-            return 100 * y
-        else:
-            min_distance = 0.9
-            return F.relu(
-                100 * y - min_distance
-            ) + min_distance  # the minimum range of Velodyne is around 3 feet ~= 0.9m
+        return y

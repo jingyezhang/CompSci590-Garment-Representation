@@ -1,13 +1,16 @@
 import math
 import os, time
 import shutil
+
+import cv2
 import torch
 import csv
 import vis_utils
 from metrics import Result
+import numpy as np
 
 fieldnames = [
-    'epoch', 'rmse', 'photo', 'mae', 'irmse', 'imae', 'mse', 'absrel', 'lg10',
+    'epoch', 'rmse', 'photo', 'mae', 'mse', 'absrel', 'lg10',
     'silog', 'squared_rel', 'delta1', 'delta2', 'delta3', 'data_time',
     'gpu_time'
 ]
@@ -56,14 +59,11 @@ class logger:
                 't_GPU={blk_avg.gpu_time:.3f}({average.gpu_time:.3f})\n\t'
                 'RMSE={blk_avg.rmse:.2f}({average.rmse:.2f}) '
                 'MAE={blk_avg.mae:.2f}({average.mae:.2f}) '
-                'iRMSE={blk_avg.irmse:.2f}({average.irmse:.2f}) '
-                'iMAE={blk_avg.imae:.2f}({average.imae:.2f})\n\t'
                 'silog={blk_avg.silog:.2f}({average.silog:.2f}) '
                 'squared_rel={blk_avg.squared_rel:.2f}({average.squared_rel:.2f}) '
                 'Delta1={blk_avg.delta1:.3f}({average.delta1:.3f}) '
                 'REL={blk_avg.absrel:.3f}({average.absrel:.3f})\n\t'
                 'Lg10={blk_avg.lg10:.3f}({average.lg10:.3f}) '
-                'Photometric={blk_avg.photometric:.3f}({average.photometric:.3f}) '
                 .format(epoch,
                         i + 1,
                         n_set,
@@ -92,10 +92,7 @@ class logger:
             writer.writerow({
                 'epoch': epoch,
                 'rmse': avg.rmse,
-                'photo': avg.photometric,
                 'mae': avg.mae,
-                'irmse': avg.irmse,
-                'imae': avg.imae,
                 'mse': avg.mse,
                 'silog': avg.silog,
                 'squared_rel': avg.squared_rel,
@@ -114,12 +111,11 @@ class logger:
             txtfile.write(
                 ("rank_metric={}\n" + "epoch={}\n" + "rmse={:.3f}\n" +
                  "mae={:.3f}\n" + "silog={:.3f}\n" + "squared_rel={:.3f}\n" +
-                 "irmse={:.3f}\n" + "imae={:.3f}\n" + "mse={:.3f}\n" +
+                "mse={:.3f}\n" +
                  "absrel={:.3f}\n" + "lg10={:.3f}\n" + "delta1={:.3f}\n" +
                  "t_gpu={:.4f}").format(self.args.rank_metric, epoch,
                                         result.rmse, result.mae, result.silog,
-                                        result.squared_rel, result.irmse,
-                                        result.imae, result.mse, result.absrel,
+                                        result.squared_rel, result.mse, result.absrel,
                                         result.lg10, result.delta1,
                                         result.gpu_time))
 
@@ -168,25 +164,29 @@ class logger:
         return is_best
 
     def conditional_save_pred(self, mode, i, pred, epoch):
-        if ("test" in mode or mode == "eval") and self.args.save_pred:
-
-            # save images for visualization/ testing
-            image_folder = os.path.join(self.output_directory,
-                                        mode + "_output")
+        if mode == "val":
+            image_folder = os.path.join(self.output_directory, mode + "_output")
             if not os.path.exists(image_folder):
                 os.makedirs(image_folder)
+
             img = torch.squeeze(pred.data.cpu()).numpy()
+            img = img.transpose(1, 2, 0)  # Convert from [C, H, W] to [H, W, C]
+
+            # If your model outputs in a range other than [0, 255], adjust accordingly
+            # For example, if it's in [0, 1], uncomment the following line:
+            img = (img * 255).astype(np.uint8)
+
+            # Convert from RGB to BGR
+            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
             filename = os.path.join(image_folder, '{0:010d}.png'.format(i))
-            vis_utils.save_depth_as_uint16png(img, filename)
+            cv2.imwrite(filename, img)  # Use imwrite to save image
 
     def conditional_summarize(self, mode, avg, is_best):
         print("\n*\nSummary of ", mode, "round")
         print(''
               'RMSE={average.rmse:.3f}\n'
               'MAE={average.mae:.3f}\n'
-              'Photo={average.photometric:.3f}\n'
-              'iRMSE={average.irmse:.3f}\n'
-              'iMAE={average.imae:.3f}\n'
               'squared_rel={average.squared_rel}\n'
               'silog={average.silog}\n'
               'Delta1={average.delta1:.3f}\n'
@@ -238,16 +238,11 @@ def save_checkpoint(state, is_best, epoch, output_directory):
 
 def get_folder_name(args):
     current_time = time.strftime('%Y-%m-%d@%H-%M')
-    if args.use_pose:
-        prefix = "mode={}.w1={}.w2={}.".format(args.train_mode, args.w1,
-                                               args.w2)
-    else:
-        prefix = "mode={}.".format(args.train_mode)
     return os.path.join(args.result,
-        prefix + 'input={}.resnet{}.criterion={}.lr={}.bs={}.wd={}.pretrained={}.jitter={}.time={}'.
-        format(args.input, args.layers, args.criterion, \
+        'resnet{}.criterion={}.lr={}.bs={}.wd={}.pretrained={}.time={}'.
+        format(args.layers, args.criterion, \
             args.lr, args.batch_size, args.weight_decay, \
-            args.pretrained, args.jitter, current_time
+            args.pretrained, current_time
             ))
 
 

@@ -1,1 +1,0 @@
-# CompSci590-Garment-Representation

@@ -7,14 +7,29 @@ import torch.nn.parallel
 import torch.optim
 import torch.utils.data
 
-from dataloaders.kitti_loader import load_calib, oheight, owidth, input_options, KittiDepth
-from model import DepthCompletionNet
+from dataloaders.dataset import TactileVisualDataset
+from model import TactileCompletionNet
 from metrics import AverageMeter, Result
 import criteria
 import helper
 from inverse_warp import Intrinsics, homography_from
 
+def get_model_size(model):
+    torch.save(model.state_dict(), "temp.p")
+    model_size = os.path.getsize("temp.p")
+    os.remove("temp.p")
+    return model_size
+
+def get_num_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 parser = argparse.ArgumentParser(description='Sparse-to-Dense')
+parser.add_argument('-m',
+                    '--modality',
+                    default='rgb',
+                    type=str,
+                    metavar='modality',
+                    help='rgb or greyscale image (default: rgb)')
 parser.add_argument('-w',
                     '--workers',
                     default=4,
@@ -34,21 +49,27 @@ parser.add_argument('--start-epoch',
 parser.add_argument('-c',
                     '--criterion',
                     metavar='LOSS',
-                    default='l2',
+                    default='l1',
                     choices=criteria.loss_names,
                     help='loss function: | '.join(criteria.loss_names) +
-                    ' (default: l2)')
+                    ' (default: l1)')
 parser.add_argument('-b',
                     '--batch-size',
-                    default=1,
+                    default=16,
                     type=int,
-                    help='mini-batch size (default: 1)')
+                    help='batch size (default: 16)')
 parser.add_argument('--lr',
                     '--learning-rate',
                     default=1e-5,
                     type=float,
                     metavar='LR',
                     help='initial learning rate (default 1e-5)')
+parser.add_argument('--sp',
+                    '--save_prediction',
+                    default=True,
+                    type=bool,
+                    metavar='save_pred',
+                    help='whether to save prediction (default True)')
 parser.add_argument('--weight-decay',
                     '--wd',
                     default=0,
@@ -71,17 +92,11 @@ parser.add_argument('--data-folder',
                     type=str,
                     metavar='PATH',
                     help='data folder (default: none)')
-parser.add_argument('-i',
-                    '--input',
-                    type=str,
-                    default='gd',
-                    choices=input_options,
-                    help='input: | '.join(input_options))
 parser.add_argument('-l',
                     '--layers',
                     type=int,
-                    default=34,
-                    help='use 16 for sparse_conv; use 18 or 34 for resnet')
+                    default= 18,
+                    help='use 18 or 34 for resnet')
 parser.add_argument('--pretrained',
                     action="store_true",
                     help='use ImageNet pre-trained weights')
@@ -100,27 +115,14 @@ parser.add_argument(
     default='rmse',
     choices=[m for m in dir(Result()) if not m.startswith('_')],
     help='metrics for which best result is sbatch_datacted')
-parser.add_argument(
-    '-m',
-    '--train-mode',
-    type=str,
-    default="dense",
-    choices=["dense", "sparse", "photo", "sparse+photo", "dense+photo"],
-    help='dense | sparse | photo | sparse+photo | dense+photo')
 parser.add_argument('-e', '--evaluate', default='', type=str, metavar='PATH')
 parser.add_argument('--cpu', action="store_true", help='run on cpu')
 
 args = parser.parse_args()
-args.use_pose = ("photo" in args.train_mode)
 # args.pretrained = not args.no_pretrained
 args.result = os.path.join('..', 'results')
-args.use_rgb = ('rgb' in args.input) or args.use_pose
-args.use_d = 'd' in args.input
-args.use_g = 'g' in args.input
-if args.use_pose:
-    args.w1, args.w2 = 0.1, 0.1
-else:
-    args.w1, args.w2 = 0, 0
+args.w1, args.w2, args.w3 = 0, 1, 0
+
 print(args)
 
 cuda = torch.cuda.is_available() and not args.cpu
@@ -133,19 +135,9 @@ else:
 print("=> using '{}' for computation.".format(device))
 
 # define loss functions
-depth_criterion = criteria.MaskedMSELoss() if (
-    args.criterion == 'l2') else criteria.MaskedL1Loss()
-photometric_criterion = criteria.PhotometricLoss()
+tactile_criterion = criteria.MaskedL1Loss() if (
+    args.criterion == 'l1') else criteria.MaskedMSELoss()
 smoothness_criterion = criteria.SmoothnessLoss()
-
-if args.use_pose:
-    # hard-coded KITTI camera intrinsics
-    K = load_calib()
-    fu, fv = float(K[0, 0]), float(K[1, 1])
-    cu, cv = float(K[0, 2]), float(K[1, 2])
-    kitti_intrinsics = Intrinsics(owidth, oheight, fu, fv, cu, cv)
-    if cuda:
-        kitti_intrinsics = kitti_intrinsics.cuda()
 
 
 def iterate(mode, args, loader, model, optimizer, logger, epoch):
@@ -156,6 +148,7 @@ def iterate(mode, args, loader, model, optimizer, logger, epoch):
     # switch to appropriate mode
     assert mode in ["train", "val", "eval", "test_prediction", "test_completion"], \
         "unsupported mode: {}".format(mode)
+    print(mode)
     if mode == 'train':
         model.train()
         lr = helper.adjust_learning_rate(args.lr, optimizer, epoch)
@@ -175,52 +168,16 @@ def iterate(mode, args, loader, model, optimizer, logger, epoch):
 
         start = time.time()
         pred = model(batch_data)
-        depth_loss, photometric_loss, smooth_loss, mask = 0, 0, 0, None
+        reconstruction_loss, smooth_loss= 0, 0
         if mode == 'train':
-            # Loss 1: the direct depth supervision from ground truth label
-            # mask=1 indicates that a pixel does not ground truth labels
-            if 'sparse' in args.train_mode:
-                depth_loss = depth_criterion(pred, batch_data['d'])
-                mask = (batch_data['d'] < 1e-3).float()
-            elif 'dense' in args.train_mode:
-                depth_loss = depth_criterion(pred, gt)
-                mask = (gt < 1e-3).float()
+            mask = batch_data['m']
+            reconstruction_loss_masked, reconstruction_loss_whole = tactile_criterion(pred, batch_data['gt'], mask)
 
-            # Loss 2: the self-supervised photometric loss
-            if args.use_pose:
-                # create multi-scale pyramids
-                pred_array = helper.multiscale(pred)
-                rgb_curr_array = helper.multiscale(batch_data['rgb'])
-                rgb_near_array = helper.multiscale(batch_data['rgb_near'])
-                if mask is not None:
-                    mask_array = helper.multiscale(mask)
-                num_scales = len(pred_array)
-
-                # compute photometric loss at multiple scales
-                for scale in range(len(pred_array)):
-                    pred_ = pred_array[scale]
-                    rgb_curr_ = rgb_curr_array[scale]
-                    rgb_near_ = rgb_near_array[scale]
-                    mask_ = None
-                    if mask is not None:
-                        mask_ = mask_array[scale]
-
-                    # compute the corresponding intrinsic parameters
-                    height_, width_ = pred_.size(2), pred_.size(3)
-                    intrinsics_ = kitti_intrinsics.scale(height_, width_)
-
-                    # inverse warp from a nearby frame to the current frame
-                    warped_ = homography_from(rgb_near_, pred_,
-                                              batch_data['r_mat'],
-                                              batch_data['t_vec'], intrinsics_)
-                    photometric_loss += photometric_criterion(
-                        rgb_curr_, warped_, mask_) * (2**(scale - num_scales))
-
-            # Loss 3: the depth smoothness loss
-            smooth_loss = smoothness_criterion(pred) if args.w2 > 0 else 0
+            # Loss 2: the smoothness loss
+            smooth_loss = smoothness_criterion(pred) if args.w1 > 0 else 0
 
             # backprop
-            loss = depth_loss + args.w1 * photometric_loss + args.w2 * smooth_loss
+            loss = args.w1 * reconstruction_loss_masked + args.w2 * reconstruction_loss_whole + args.w3 * smooth_loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -232,21 +189,17 @@ def iterate(mode, args, loader, model, optimizer, logger, epoch):
             mini_batch_size = next(iter(batch_data.values())).size(0)
             result = Result()
             if mode != 'test_prediction' and mode != 'test_completion':
-                result.evaluate(pred.data, gt.data, photometric_loss)
+                result.evaluate(pred.data, gt.data)
             [
                 m.update(result, gpu_time, data_time, mini_batch_size)
                 for m in meters
             ]
             logger.conditional_print(mode, i, epoch, lr, len(loader),
                                      block_average_meter, average_meter)
-            logger.conditional_save_img_comparison(mode, i, batch_data, pred,
-                                                   epoch)
             logger.conditional_save_pred(mode, i, pred, epoch)
 
     avg = logger.conditional_save_info(mode, average_meter, epoch)
     is_best = logger.rank_conditional_save_best(mode, avg, epoch)
-    if is_best and not (mode == "train"):
-        logger.save_img_comparison_as_best(mode, epoch)
     logger.conditional_summarize(mode, avg, is_best)
 
     return avg, is_best
@@ -286,7 +239,14 @@ def main():
             return
 
     print("=> creating model and optimizer ... ", end='')
-    model = DepthCompletionNet(args).to(device)
+    model = TactileCompletionNet(args).to(device)
+
+    num_parameters = get_num_parameters(model)
+    print(f"Number of trainable parameters: {num_parameters}")
+
+    model_size = get_model_size(model)
+    
+    print("Approximate model size on disk: {:.2f} MB".format(model_size / (1024 ** 2)))
     model_named_params = [
         p for _, p in model.named_parameters() if p.requires_grad
     ]
@@ -304,7 +264,7 @@ def main():
     # Data loading code
     print("=> creating data loaders ... ")
     if not is_eval:
-        train_dataset = KittiDepth('train', args)
+        train_dataset = TactileVisualDataset('train', args)
         train_loader = torch.utils.data.DataLoader(train_dataset,
                                                    batch_size=args.batch_size,
                                                    shuffle=True,
@@ -312,7 +272,7 @@ def main():
                                                    pin_memory=True,
                                                    sampler=None)
         print("\t==> train_loader size:{}".format(len(train_loader)))
-    val_dataset = KittiDepth('val', args)
+    val_dataset = TactileVisualDataset('val', args)
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=1,
