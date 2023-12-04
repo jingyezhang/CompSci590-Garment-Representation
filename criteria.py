@@ -8,48 +8,33 @@ class MaskedMSELoss(nn.Module):
     def __init__(self):
         super(MaskedMSELoss, self).__init__()
 
-    def forward(self, pred, target, mask):
+    def forward(self, pred, target, mask = None):
         assert pred.dim() == target.dim(), "inconsistent dimensions"
 
-        # Ensure mask is binary
-        mask = (mask > 0.5).float()
+        if mask is not None:
+            # Ensure mask is the same size as pred and target
+            assert mask.size() == target.size(), "Mask must be the same size as target"
 
-        # Separate the regions based on mask
-        masked_pred = pred * mask
-        masked_target = target * mask
+            # Apply mask
+            diff = pred - target
+            masked_diff = diff * mask  # Apply mask by element-wise multiplication
+            loss = (masked_diff ** 2).mean()
+        else:
+            # Calculate MSE loss normally if no mask is provided
+            loss = ((pred - target) ** 2).mean()
 
-        non_masked_pred = pred * (1 - mask)
-        non_masked_target = target * (1 - mask)
-
-        # Calculate MSE loss separately
-        masked_loss = ((masked_pred - masked_target) ** 2).mean()
-        non_masked_loss = ((non_masked_pred - non_masked_target) ** 2).mean()
-
-        return masked_loss, non_masked_loss
-
+        return loss
 
 class MaskedL1Loss(nn.Module):
     def __init__(self):
         super(MaskedL1Loss, self).__init__()
 
-    def forward(self, pred, target, mask, weight=None):
+    def forward(self, pred, target, mask = None):
         assert pred.dim() == target.dim(), "inconsistent dimensions"
 
-        # Ensure mask is binary
-        mask = (mask > 0.5).float()
-
-        # Separate the regions based on mask
-        masked_pred = pred * mask
-        masked_target = target * mask
-
-        non_masked_pred = pred * (1 - mask)
-        non_masked_target = target * (1 - mask)
-
-        # Calculate L1 loss separately
-        masked_loss = (torch.abs(masked_pred - masked_target)).mean()
-        non_masked_loss = (torch.abs(non_masked_pred - non_masked_target)).mean()
-
-        return masked_loss, non_masked_loss
+        # Calculate L1 loss
+        loss = torch.abs(pred - target).mean()
+        return loss
 
 
 class SmoothnessLoss(nn.Module):

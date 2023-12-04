@@ -60,10 +60,10 @@ parser.add_argument('-b',
                     help='batch size (default: 16)')
 parser.add_argument('--lr',
                     '--learning-rate',
-                    default=1e-5,
+                    default=1e-3,
                     type=float,
                     metavar='LR',
-                    help='initial learning rate (default 1e-5)')
+                    help='initial learning rate (default 1e-3)')
 parser.add_argument('--sp',
                     '--save_prediction',
                     default=True,
@@ -95,7 +95,7 @@ parser.add_argument('--data-folder',
 parser.add_argument('-l',
                     '--layers',
                     type=int,
-                    default= 18,
+                    default= 34,
                     help='use 18 or 34 for resnet')
 parser.add_argument('--pretrained',
                     action="store_true",
@@ -121,7 +121,7 @@ parser.add_argument('--cpu', action="store_true", help='run on cpu')
 args = parser.parse_args()
 # args.pretrained = not args.no_pretrained
 args.result = os.path.join('..', 'results')
-args.w1, args.w2, args.w3 = 0, 1, 0
+args.w1, args.w2, args.w3 = 1, 0.2, 0
 
 print(args)
 
@@ -137,6 +137,8 @@ print("=> using '{}' for computation.".format(device))
 # define loss functions
 tactile_criterion = criteria.MaskedL1Loss() if (
     args.criterion == 'l1') else criteria.MaskedMSELoss()
+secondary_tactile_criterion = criteria.MaskedMSELoss() if (
+    args.criterion == 'l2') else criteria.MaskedL1Loss()
 smoothness_criterion = criteria.SmoothnessLoss()
 
 
@@ -171,13 +173,14 @@ def iterate(mode, args, loader, model, optimizer, logger, epoch):
         reconstruction_loss, smooth_loss= 0, 0
         if mode == 'train':
             mask = batch_data['m']
-            reconstruction_loss_masked, reconstruction_loss_whole = tactile_criterion(pred, batch_data['gt'], mask)
+            reconstruction_loss = tactile_criterion(pred, batch_data['gt'], mask)
+            secondary_reconstruction_loss = secondary_tactile_criterion(pred, batch_data['gt'], mask)
 
             # Loss 2: the smoothness loss
             smooth_loss = smoothness_criterion(pred) if args.w1 > 0 else 0
 
             # backprop
-            loss = args.w1 * reconstruction_loss_masked + args.w2 * reconstruction_loss_whole + args.w3 * smooth_loss
+            loss = args.w1 * reconstruction_loss + args.w2 * secondary_reconstruction_loss+ args.w3 * smooth_loss
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

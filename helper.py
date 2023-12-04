@@ -170,7 +170,8 @@ class logger:
                 os.makedirs(image_folder)
 
             img = torch.squeeze(pred.data.cpu()).numpy()
-            img = img.transpose(1, 2, 0)  # Convert from [C, H, W] to [H, W, C]
+            if len(img.shape) == 3:
+                img = img.transpose(1, 2, 0)  # Convert from [C, H, W] to [H, W, C]
 
             # If your model outputs in a range other than [0, 255], adjust accordingly
             # For example, if it's in [0, 1], uncomment the following line:
@@ -215,8 +216,10 @@ def backup_source_code(backup_directory):
 
 
 def adjust_learning_rate(lr_init, optimizer, epoch):
-    """Sets the learning rate to the initial LR decayed by 10 every 5 epochs"""
-    lr = lr_init * (0.1**(epoch // 5))
+    """Sets the learning rate to the initial LR decayed by 10 every 10 epochs"""
+    lr = lr_init * (0.1**(epoch // 10))
+    if lr < 1e-7:
+        lr = 1e-7
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
     return lr

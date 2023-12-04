@@ -78,44 +78,39 @@ class TactileCompletionNet(nn.Module):
         if args.modality == 'g':
             self.conv1_t = conv_bn_relu(1,
                                         channels // 2,
-                                        kernel_size=3,
-                                        stride=1,
-                                        padding=1)
+                                        kernel_size=6,
+                                        stride=2,
+                                        padding=1)            
         else:
             self.conv1_t = conv_bn_relu(3,
-                                        channels,
-                                        kernel_size=3,
-                                        stride=1,
+                                        channels // 2,
+                                        kernel_size=6,
+                                        stride=2,
                                         padding=1)
             
         self.conv2_t = conv_bn_relu(channels // 2,
                                     channels,
                                     kernel_size=3,
-                                    stride=1,
+                                    stride=2,
                                     padding=1)
+        
         self.conv3_t = conv_bn_relu(channels,
                                     channels,
                                     kernel_size=3,
                                     stride=1,
                                     padding=1)
         
-        if args.modality == 'g':
-            self.conv1_v = conv_bn_relu(3,
-                                        channels + channels // 2,
-                                        kernel_size=3,
-                                        stride=1,
-                                        padding=1)
-        else:
-            self.conv1_v = conv_bn_relu(3,
-                                        channels,
-                                        kernel_size=3,
-                                        stride=1,
-                                        padding=1)
+
+        self.conv1_v = conv_bn_relu(3,
+                                    channels // 2,
+                                    kernel_size=6,
+                                    stride=2,
+                                    padding=1)
             
         self.conv2_v = conv_bn_relu(channels // 2,
                                     channels,
                                     kernel_size=3,
-                                    stride=1,
+                                    stride=2,
                                     padding=1)
         self.conv3_v = conv_bn_relu(channels,
                                     channels,
@@ -178,42 +173,42 @@ class TactileCompletionNet(nn.Module):
                                     kernel_size=kernel_size,
                                     stride=1,
                                     padding=1)
-        self.convtf_post_1 = conv_bn_relu(in_channels=128,
-                                            out_channels=3,
-                                            kernel_size=1,
-                                            stride=1,
-                                            bn=False,
-                                            relu=False)
-        self.convtf_post_2 = conv_bn_relu(in_channels=64,
-                                            out_channels=32,
-                                            kernel_size=kernel_size,
-                                            stride=1,
-                                            bn=False,
-                                            relu=False)
-        self.convtf_post_3 = conv_bn_relu(in_channels=32,
-                                            out_channels=16,
-                                            kernel_size=kernel_size,
-                                            stride=1,
-                                            bn=False,
-                                            relu=False)
-        self.convtf_post_4 = conv_bn_relu(in_channels=16,
-                                            out_channels=3,
+        
+        self.convtf_post_1 = convt_bn_relu(in_channels=128,
+                                            out_channels=64,
                                             kernel_size=3,
                                             stride=1,
-                                            bn=False,
-                                            relu=False)
+                                            padding = 1)
+        self.convtf_post_2 = convt_bn_relu(in_channels=64,
+                                            out_channels=32,
+                                            kernel_size=3,
+                                            stride=2,
+                                            padding = 1)
+        
+        if args.modality == "g":
+            self.convtf_post_3 = convt_bn_relu(in_channels=32,
+                                                out_channels=1,
+                                                kernel_size=6,
+                                                stride=2,
+                                                padding = 1)
+        else:
+            self.convtf_post_3 = convt_bn_relu(in_channels=32,
+                                                out_channels=3,
+                                                kernel_size=6,
+                                                stride=2,
+                                                padding = 1)
 
     def forward(self, x):
         # first layer
         conv1_t = self.conv1_t(x['t'])
-        # conv2_t = self.conv2_t(conv1_t)
-        # conv3_t = self.conv3_t(conv2_t)
+        conv2_t = self.conv2_t(conv1_t)
+        conv3_t = self.conv3_t(conv2_t)
         
         conv1_v = self.conv1_v(x['v'])
-        # conv2_v = self.conv2_v(conv1_v)
-        # conv3_v = self.conv3_v(conv2_v)
-
-        conv1 = torch.cat((conv1_v, conv1_t), 1)
+        conv2_v = self.conv2_v(conv1_v)
+        conv3_v = self.conv3_v(conv2_v)
+        
+        conv1 = torch.cat((conv3_v, conv3_t), 1)
         
         # # peform additive fusion
         # conv1 = conv1_t + conv1_v
@@ -227,28 +222,38 @@ class TactileCompletionNet(nn.Module):
 
         # decoder
         convt5 = self.convt5(conv6)
+        
+        
+        # conv5 = F.pad(conv5, (0, 1, 0, 1), "constant", 0)
         y = torch.cat((convt5, conv5), 1)
 
+ 
         convt4 = self.convt4(y)
+        # conv4 = F.pad(conv4, (0, 2, 0, 2), "constant", 0)
         y = torch.cat((convt4, conv4), 1)
 
         convt3 = self.convt3(y)
+        # conv3 = F.pad(conv3, (0, 4, 0, 4), "constant", 0)
         y = torch.cat((convt3, conv3), 1)
 
+
         convt2 = self.convt2(y)
+        # conv2 = F.pad(conv2, (0, 8, 0, 9), "constant", 0)
         y = torch.cat((convt2, conv2), 1)
 
         convt1 = self.convt1(y)
+        # conv1 = F.pad(conv1, (0, 8, 0, 9), "constant", 0)
         y = torch.cat((convt1, conv1), 1)
         
         y = self.convtf_post_1(y)
         
-        # y = self.convtf_post_2(y)
+        y = self.convtf_post_2(y)
         
-        # y = self.convtf_post_3(y)
+        y = self.convtf_post_3(y)
         
         # y = self.convtf_post_4(y)        
         
-        # y_upsampled = F.interpolate(y, size=(256, 256), mode='bilinear', align_corners=False) # # batchsize * 3 * 256 * 256
-
-        return y
+        y_upsampled = F.interpolate(y, size=(256, 256), mode='bilinear', align_corners=False) # # batchsize * 3 * 256 * 256
+        
+        y_output = torch.sigmoid(y_upsampled)
+        return y_output

@@ -21,20 +21,17 @@ from torchvision import transforms
 # Define transforms for each image type
 transform_tactile = transforms.Compose([
     transforms.Resize((height, width)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.3513158, 0.38677276, 0.36562601], [0.11686191, 0.10412129, 0.17822667])
+    transforms.ToTensor()
 ])
 
 transform_visual = transforms.Compose([
     transforms.Resize((height, width)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.67014886, 0.71080253, 0.68596643], [0.19509351, 0.20746577, 0.19502362])
+    transforms.ToTensor()
 ])
 
 transform_gt = transforms.Compose([
     transforms.Resize((height, width)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.3513158, 0.38677276, 0.36562601], [0.11686191, 0.10412129, 0.17822667])
+    transforms.ToTensor()
 ])
 
 transform_mask = transforms.Compose([
@@ -43,9 +40,9 @@ transform_mask = transforms.Compose([
 ])
 
 transform_normalize_grayscale = transforms.Compose([
+    transforms.Resize((height, width)),
     transforms.Grayscale(num_output_channels=1),
-    transforms.ToTensor(),
-    transforms.Normalize(0.3737627425266778, 0.08982215195952813)
+    transforms.ToTensor()
 ])
 
 

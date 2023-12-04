@@ -23,7 +23,7 @@ def calculate_mean_std(folder_path, batch_size=100):
         subdir_path = os.path.join(folder_path, subdir)
         if os.path.isdir(subdir_path):
             for file in os.listdir(subdir_path):
-                if file.endswith('_t_sparse.png'):
+                if file.endswith('_t.png'):
                     full_path = os.path.join(subdir_path, file)
                     print(full_path)
                     image_paths.append(full_path)
