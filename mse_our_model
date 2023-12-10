@@ -1,0 +1,71 @@
+import os
+import cv2
+import numpy as np
+from sklearn.metrics import mean_squared_error
+
+
+# For calculating the mean squared error between tactile images in testing_image_copy and the predictions within the val_output folder of results
+
+
+# Replace 'your_username' with your actual Ubuntu username
+base_path = "/home/annapurnapandita/CompSci590-Garment-Representation-4"
+testing_images_path = os.path.join(base_path, "training_images_copy")
+results_path = "/home/annapurnapandita/results/resnet34.criterion=l1.lr=0.001.bs=16.wd=0.pretrained=False.time=2023-12-04@15-42"
+val_output_path = os.path.join(results_path, "val_output")
+
+
+
+
+# Function to load images from a folder
+def load_images_from_folder(folder):
+    images = []
+    for filename in os.listdir(folder):
+        img_path = os.path.join(folder, filename)
+        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        if img is not None:
+            images.append(img)
+    return images
+
+
+
+
+# Function to calculate mean squared error between two sets of images
+def calculate_mse(images1, images2):
+    mse_values = []
+    for img1, img2 in zip(images1, images2):
+        mse = mean_squared_error(img1.flatten(), img2.flatten())
+        mse_values.append(mse)
+    return np.mean(mse_values)
+
+
+
+
+# Load tactile images from testing_images_copy
+testing_images = []
+for subfolder in os.listdir(testing_images_path):
+    subfolder_path = os.path.join(testing_images_path, subfolder)
+    tactile_image_path = os.path.join(subfolder_path, f"{subfolder}_t.png")
+    tactile_img = cv2.imread(tactile_image_path, cv2.IMREAD_GRAYSCALE)
+    testing_images.append(tactile_img)
+
+
+# Load predicted images from val_output
+predicted_images = load_images_from_folder(val_output_path)
+
+
+# Calculate mean squared error
+mse = calculate_mse(testing_images, predicted_images)
+
+
+print(f"Mean Squared Error: {mse}")
+
+
+
+
+
+
+
+
+
+
+
